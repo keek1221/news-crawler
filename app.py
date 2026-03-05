@@ -13,24 +13,39 @@ from kiwipiepy import Kiwi
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --------------------------------------------------------------------------
-# 1. 크롤링 함수 (서버용)
+# 1. 크롤링 함수 (차단 회피 헤더 적용)
 # --------------------------------------------------------------------------
 def get_news_links_by_date(keyword, target_date):
     links = []
     page = 1
     date_str = target_date.strftime("%Y.%m.%d")
-    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    # [핵심] 네이버를 속이기 위한 강력한 헤더
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.naver.com/",
+        "Connection": "keep-alive"
+    }
     
     while True:
         start_idx = (page - 1) * 10 + 1
         url = f"https://search.naver.com/search.naver?where=news&query={keyword}&sm=tab_pge&sort=0&photo=0&field=0&pd=3&ds={date_str}&de={date_str}&start={start_idx}"
         
         try:
-            response = requests.get(url, headers=headers, timeout=5)
+            response = requests.get(url, headers=headers, timeout=10)
+            
+            # 차단 여부 디버깅용 (화면에 에러 출력)
+            if "시스템에서 비정상적인 접근" in response.text:
+                st.error(f"⚠️ 네이버가 서버 접근을 차단했습니다. (날짜: {date_str})")
+                break
+                
             soup = BeautifulSoup(response.text, 'html.parser')
             news_items = soup.select("div.news_area")
             
-            if not news_items: break
+            if not news_items: 
+                break
             
             found_new = False
             for item in news_items:
@@ -43,16 +58,22 @@ def get_news_links_by_date(keyword, target_date):
                         found_new = True
             
             if not found_new: break
-            page += 1
-            if page > 20: break # 서버 부하 방지 (20페이지 제한)
-            time.sleep(0.1)
             
-        except Exception:
+            page += 1
+            if page > 20: break 
+            time.sleep(0.5) # 딜레이를 조금 더 길게 (0.1 -> 0.5)
+            
+        except Exception as e:
+            st.warning(f"접속 오류: {e}")
             break
+            
     return links
 
 def get_news_content(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # 본문 크롤링도 헤더 추가
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     try:
         response = requests.get(url, headers=headers, verify=False, timeout=5)
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -82,8 +103,7 @@ def analyze_simple(df):
 # 2. 메인 실행 로직
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="뉴스 수집기 Web", page_icon="🌐", layout="wide")
-st.title("🌐 네이버 뉴스 수집기 (Web 버전)")
-st.caption("다른 사람도 접속 가능한 웹 버전입니다.")
+st.title("🌐 네이버 뉴스 수집기 (Web)")
 
 with st.sidebar:
     st.header("설정")
@@ -104,8 +124,9 @@ if st.button("🚀 수집 시작"):
         status_text = st.empty()
         
         for i, target_date in enumerate(date_list):
-            status_text.text(f"{target_date} 수집 중...")
+            status_text.text(f"📅 {target_date} 데이터 요청 중...")
             day_links = get_news_links_by_date(keyword, target_date)
+            
             for item in day_links:
                 content = get_news_content(item['Link'])
                 if content:
@@ -117,9 +138,8 @@ if st.button("🚀 수집 시작"):
             
         if total_data:
             df = pd.DataFrame(total_data)
-            st.success(f"완료! 총 {len(df)}건")
+            st.success(f"✅ 완료! 총 {len(df)}건 수집됨")
             
-            # [핵심] 서버에서는 다운로드 버튼 제공
             csv = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
             st.download_button(
                 label="📥 엑셀(CSV) 다운로드",
@@ -129,4 +149,5 @@ if st.button("🚀 수집 시작"):
             )
             analyze_simple(df)
         else:
-            st.warning("수집된 데이터가 없습니다.")
+            st.error("수집된 데이터가 0건입니다. 네이버가 클라우드 서버의 접근을 차단했을 가능성이 높습니다.")
+            st.info("💡 팁: '무제한 수집'은 개인 PC(로컬)에서 가장 잘 작동합니다.")
